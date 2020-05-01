@@ -28,6 +28,7 @@
 
 #include <core/ScenarioParser.h>
 #include <ros/ros.h>
+#include <map>
 
 namespace sf
 {
@@ -40,14 +41,16 @@ namespace sf
 
     protected:
         virtual bool PreProcess(XMLNode* root);
+        virtual bool PreProcess(XMLNode* root, std::map<std::string, std::string>& scenario_args);
         virtual bool ParseRobot(XMLElement* element);
         virtual bool ParseSensor(XMLElement* element, Robot* robot);
         virtual bool ParseActuator(XMLElement* element, Robot* robot);
 
-    private:
-        std::string SubstituteROSVars(const std::string& value);
-        bool ReplaceROSVars(XMLNode* node);
-    };
+	private:
+		std::string SubstituteROSVars(const std::string& value, std::map<std::string, std::string>& scenario_args);
+		bool ReplaceROSVars(XMLNode* node, std::map<std::string, std::string>& scenario_args);
+		bool ReplaceROSVars(XMLNode* node);
+	};
 }
 
 #endif
