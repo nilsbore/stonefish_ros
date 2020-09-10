@@ -18,6 +18,10 @@
 	<build_depend>std_srvs</build_depend>
 	<build_depend>tf</build_depend>
 	<build_depend>tf_conversions</build_depend>
+	<build_depend>opengl</build_depend>
+	<build_depend>sdl2</build_depend>
+	<build_depend>libfreetype6-dev</build_depend>
+	<build_depend>libglew-dev</build_depend>
 	
 	<run_depend>roscpp</run_depend>
 	<run_depend>roslib</run_depend>
@@ -28,6 +32,10 @@
 	<run_depend>std_srvs</run_depend>
 	<run_depend>tf</run_depend>
 	<run_depend>tf_conversions</run_depend>
+	<run_depend>opengl</run_depend>
+	<run_depend>sdl2</run_depend>
+	<run_depend>libfreetype6</run_depend>
+	<run_depend>libglew-dev</run_depend>
   <export>
   </export>
 </package>
