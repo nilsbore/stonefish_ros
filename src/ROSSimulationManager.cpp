@@ -206,7 +206,7 @@ void ROSSimulationManager::SimulationStepCompleted(Scalar timeStep)
         {
             Transform transform = rosRobots[i]->robot->getTransform();
             transform.setRotation(transform.getRotation()*btQuaternion(0.0, 0.0, 1.5708));
-            sf::ROSInterface::PublishTF(br, transform, ros::Time::now(), "world_ned", rosRobots[i]->robot->getName() + "/base_link");
+            sf::ROSInterface::PublishTF(br, transform, ros::Time::now(), "world_ned", "gt/" + rosRobots[i]->robot->getName() + "/base_link");
         }
     }
 
