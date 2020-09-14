@@ -39,10 +39,13 @@ namespace sf
         ROSScenarioParser(ROSSimulationManager* sm);
 
     protected:
-        virtual bool PreProcess(XMLNode* root);
+        virtual bool PreProcess(XMLNode* root, 
+                                const std::map<std::string, std::string>& args = std::map<std::string, std::string>());
         virtual bool ParseRobot(XMLElement* element);
         virtual bool ParseSensor(XMLElement* element, Robot* robot);
         virtual bool ParseActuator(XMLElement* element, Robot* robot);
+        virtual bool ParseComm(XMLElement* element, Robot* robot = nullptr);
+        virtual bool ParseContact(XMLElement* element);
 
     private:
         std::string SubstituteROSVars(const std::string& value);
