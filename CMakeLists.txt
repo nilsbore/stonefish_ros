@@ -22,7 +22,7 @@ include_directories(external/glm)
 include_directories(${BULLET_INCLUDE_DIRS})
 add_subdirectory(external)
 
-set(Stonefish_INCLUDE_DIRS external/stonefish/Library/include)
+set(Stonefish_INCLUDE_DIRS external/stonefish/Library/include ${PROJECT_BINARY_DIR}/external/stonefish)
 set(Stonefish_LIBRARIES Stonefish)
 
 add_service_files(
