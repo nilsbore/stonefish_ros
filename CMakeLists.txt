@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 3.10)
 project(stonefish_ros)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -DBT_EULER_DEFAULT_ZYX -DBT_USE_DOUBLE_PRECISION -DBUILD_PYBULLET=OFF -DBUILD_SHARED_LIBS=ON -DUSE_DOUBLE_PRECISION=ON -DSHADER_DIR_PATH=\\\"${CMAKE_CURRENT_SOURCE_DIR}/external/stonefish/Library/shaders/\\\"")
@@ -8,6 +8,7 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   nav_msgs
   sensor_msgs
+  visualization_msgs
   std_srvs
   roscpp
   roslib
@@ -22,8 +23,18 @@ include_directories(external/glm)
 include_directories(${BULLET_INCLUDE_DIRS})
 add_subdirectory(external)
 
-set(Stonefish_INCLUDE_DIRS external/stonefish/Library/include)
+set(Stonefish_INCLUDE_DIRS external/stonefish/Library/include ${PROJECT_BINARY_DIR}/external/stonefish)
 set(Stonefish_LIBRARIES Stonefish)
+
+add_service_files(
+   FILES
+   SonarSettings.srv
+   SonarSettings2.srv
+)
+
+generate_messages(
+  DEPENDENCIES
+)
 
 #find_package(PkgConfig REQUIRED)
 #pkg_check_modules(Stonefish REQUIRED stonefish)
