@@ -42,6 +42,7 @@
 #include <sensors/vision/MSIS.h>
 #include <sensors/Contact.h>
 #include <comms/USBL.h>
+#include <entities/AnimatedEntity.h>
 
 #include <sensor_msgs/FluidPressure.h>
 #include <sensor_msgs/Imu.h>
@@ -60,6 +61,7 @@
 #include <visualization_msgs/MarkerArray.h>
 #include <cola2_msgs/DVL.h>
 #include <cola2_msgs/Float32Stamped.h>
+#include <stonefish_ros/Int32Stamped.h>
 
 #include <Eigen/Core>
 #include <Eigen/Dense>
@@ -389,6 +391,42 @@ void ROSInterface::PublishUSBL(ros::Publisher& usblPub, USBL* usbl)
     usblPub.publish(msg);
 }
 
+void ROSInterface::PublishTrajectoryState(ros::Publisher& odom, ros::Publisher& iter, AnimatedEntity* anim)
+{
+    Trajectory* tr = anim->getTrajectory();
+    Transform T = tr->getInterpolatedTransform();
+    Vector3 p = T.getOrigin();
+    Quaternion q = T.getRotation();
+    Vector3 v = tr->getInterpolatedLinearVelocity();
+    Vector3 omega = tr->getInterpolatedAngularVelocity();
+
+    //Odometry message
+    nav_msgs::Odometry msg;
+    msg.header.frame_id = "world_ned";
+    msg.header.stamp = ros::Time::now();
+    msg.child_frame_id = anim->getName();
+    msg.pose.pose.position.x = p.x();
+    msg.pose.pose.position.y = p.y();
+    msg.pose.pose.position.z = p.z();
+    msg.pose.pose.orientation.x = q.x();
+    msg.pose.pose.orientation.y = q.y();
+    msg.pose.pose.orientation.z = q.z();
+    msg.pose.pose.orientation.w = q.w();
+    msg.twist.twist.linear.x = v.x();
+    msg.twist.twist.linear.y = v.y();
+    msg.twist.twist.linear.z = v.z();
+    msg.twist.twist.angular.x = omega.x();
+    msg.twist.twist.angular.y = omega.y();
+    msg.twist.twist.angular.z = omega.z();
+    odom.publish(msg);
+
+    //Iteration message
+    stonefish_ros::Int32Stamped msg2;
+    msg2.header = msg.header;
+    msg2.data = (int32_t)tr->getPlaybackIteration();
+    iter.publish(msg2);
+}
+
 std::pair<sensor_msgs::ImagePtr, sensor_msgs::CameraInfoPtr> ROSInterface::GenerateCameraMsgPrototypes(Camera* cam, bool depth)
 {
     //Image message
@@ -446,9 +484,9 @@ std::pair<sensor_msgs::ImagePtr, sensor_msgs::ImagePtr> ROSInterface::GenerateFL
     sensor_msgs::ImagePtr img = boost::make_shared<sensor_msgs::Image>();
     img->header.frame_id = fls->getName();
     fls->getResolution(img->width, img->height);
-    img->encoding = "32FC1";
+    img->encoding = "mono8";
     img->is_bigendian = 0;
-    img->step = img->width * sizeof(float);
+    img->step = img->width;
     img->data.resize(img->step * img->height);
 
     //Display message
@@ -469,9 +507,9 @@ std::pair<sensor_msgs::ImagePtr, sensor_msgs::ImagePtr> ROSInterface::GenerateSS
     sensor_msgs::ImagePtr img = boost::make_shared<sensor_msgs::Image>();
     img->header.frame_id = sss->getName();
     sss->getResolution(img->width, img->height);
-    img->encoding = "32FC1";
+    img->encoding = "mono8";
     img->is_bigendian = 0;
-    img->step = img->width * sizeof(float);
+    img->step = img->width;
     img->data.resize(img->step * img->height);
 
     //Display message
@@ -492,9 +530,9 @@ std::pair<sensor_msgs::ImagePtr, sensor_msgs::ImagePtr> ROSInterface::GenerateMS
     sensor_msgs::ImagePtr img = boost::make_shared<sensor_msgs::Image>();
     img->header.frame_id = msis->getName();
     msis->getResolution(img->width, img->height);
-    img->encoding = "32FC1";
+    img->encoding = "mono8";
     img->is_bigendian = 0;
-    img->step = img->width * sizeof(float);
+    img->step = img->width;
     img->data.resize(img->step * img->height);
 
     //Display message

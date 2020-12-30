@@ -26,8 +26,11 @@
 #include "stonefish_ros/ROSSimulationManager.h"
 #include "stonefish_ros/ROSScenarioParser.h"
 #include "stonefish_ros/ROSInterface.h"
+#include "stonefish_ros/ThrusterState.h"
 
 #include <core/Robot.h>
+#include <entities/AnimatedEntity.h>
+#include <entities/animation/ManualTrajectory.h>
 #include <sensors/scalar/Pressure.h>
 #include <sensors/scalar/DVL.h>
 #include <sensors/scalar/IMU.h>
@@ -61,6 +64,16 @@ ROSSimulationManager::ROSSimulationManager(Scalar stepsPerSecond, std::string sc
 
 ROSSimulationManager::~ROSSimulationManager()
 {
+}
+
+uint64_t ROSSimulationManager::getSimulationClock()
+{
+    return ros::Time::now().toNSec()/1000;
+}
+
+void ROSSimulationManager::SimulationClockSleep(uint64_t us)
+{
+    ros::Duration(0, (int32_t)us*1000).sleep();
 }
 
 ros::NodeHandle& ROSSimulationManager::getNodeHandle()
@@ -174,13 +187,27 @@ void ROSSimulationManager::SimulationStepCompleted(Scalar timeStep)
 
         switch(comm->getType())
         {
-            case CommType::ACOUSTIC:
+            case CommType::USBL:
                 ROSInterface::PublishUSBL(pubs[comm->getName()], (USBL*)comm);
                 comm->MarkDataOld();
                 break;
             
             default:
                 break;
+        }
+    }
+
+    //////////////////////////////////////TRAJECTORIES/////////////////////////////////////////////
+    id = 0;
+    Entity* ent;
+    while((ent = getEntity(id++)) != NULL)
+    {
+        if(ent->getType() == EntityType::ANIMATED)
+        {
+            if(pubs.find(ent->getName() + "/odometry") == pubs.end())
+                continue;
+
+            ROSInterface::PublishTrajectoryState(pubs[ent->getName() + "/odometry"], pubs[ent->getName() + "/iteration"], (AnimatedEntity*)ent);
         }
     }
 
@@ -213,40 +240,75 @@ void ROSSimulationManager::SimulationStepCompleted(Scalar timeStep)
     //////////////////////////////////////SERVOS(JOINTS)/////////////////////////////////////////
     for(size_t i=0; i<rosRobots.size(); ++i)
     {
-        if(rosRobots[i]->servoSetpoints.size() == 0 
-           || pubs.find(rosRobots[i]->robot->getName() + "/servos") == pubs.end())
-            continue;
-
-        unsigned int aID = 0;
-        unsigned int sID = 0;
-        Actuator* actuator;
-        Servo* srv;
-
-        sensor_msgs::JointState msg;
-        msg.header.stamp = ros::Time::now();
-        msg.header.frame_id = rosRobots[i]->robot->getName();
-        msg.name.resize(rosRobots[i]->servoSetpoints.size());
-        msg.position.resize(rosRobots[i]->servoSetpoints.size());
-        msg.velocity.resize(rosRobots[i]->servoSetpoints.size());
-        msg.effort.resize(rosRobots[i]->servoSetpoints.size());
-
-        while((actuator = rosRobots[i]->robot->getActuator(aID++)) != NULL)
+        if(rosRobots[i]->servoSetpoints.size() != 0 
+           && pubs.find(rosRobots[i]->robot->getName() + "/servos") != pubs.end())
         {
-            if(actuator->getType() == ActuatorType::SERVO)
-            {
-                srv = (Servo*)actuator;
-                msg.name[sID] = srv->getJointName();
-                msg.position[sID] = srv->getPosition();
-                msg.velocity[sID] = srv->getVelocity();
-                msg.effort[sID] = srv->getEffort();
-                ++sID;
+            unsigned int aID = 0;
+            unsigned int sID = 0;
+            Actuator* actuator;
+            Servo* srv;
 
-                if(sID == rosRobots[i]->servoSetpoints.size())
-                    break;
+            sensor_msgs::JointState msg;
+            msg.header.stamp = ros::Time::now();
+            msg.header.frame_id = rosRobots[i]->robot->getName();
+            msg.name.resize(rosRobots[i]->servoSetpoints.size());
+            msg.position.resize(rosRobots[i]->servoSetpoints.size());
+            msg.velocity.resize(rosRobots[i]->servoSetpoints.size());
+            msg.effort.resize(rosRobots[i]->servoSetpoints.size());
+
+            while((actuator = rosRobots[i]->robot->getActuator(aID++)) != NULL)
+            {
+                if(actuator->getType() == ActuatorType::SERVO)
+                {
+                    srv = (Servo*)actuator;
+                    msg.name[sID] = srv->getJointName();
+                    msg.position[sID] = srv->getPosition();
+                    msg.velocity[sID] = srv->getVelocity();
+                    msg.effort[sID] = srv->getEffort();
+                    ++sID;
+
+                    if(sID == rosRobots[i]->servoSetpoints.size())
+                        break;
+                }
             }
+
+            pubs[rosRobots[i]->robot->getName() + "/servos"].publish(msg);
         }
 
-        pubs[rosRobots[i]->robot->getName() + "/servos"].publish(msg);
+        if(rosRobots[i]->thrusterSetpoints.size() != 0 
+           && pubs.find(rosRobots[i]->robot->getName() + "/thrusters") != pubs.end())
+        {
+            unsigned int aID = 0;
+            unsigned int thID = 0;
+            Actuator* actuator;
+            Thruster* th;
+
+            stonefish_ros::ThrusterState msg;
+            msg.header.stamp = ros::Time::now();
+            msg.header.frame_id = rosRobots[i]->robot->getName();
+            msg.setpoint.resize(rosRobots[i]->thrusterSetpoints.size());
+            msg.rpm.resize(rosRobots[i]->thrusterSetpoints.size());
+            msg.thrust.resize(rosRobots[i]->thrusterSetpoints.size());
+            msg.torque.resize(rosRobots[i]->thrusterSetpoints.size());
+
+            while((actuator = rosRobots[i]->robot->getActuator(aID++)) != NULL)
+            {
+                if(actuator->getType() == ActuatorType::THRUSTER)
+                {
+                    th = (Thruster*)actuator;
+                    msg.setpoint[thID] = th->getSetpoint();
+                    msg.rpm[thID] = th->getOmega()/(Scalar(2)*M_PI)*Scalar(60);
+                    msg.thrust[thID] = th->getThrust();
+                    msg.torque[thID] = th->getTorque();
+                    ++thID;
+
+                    if(thID == rosRobots[i]->thrusterSetpoints.size())
+                        break;
+                }
+            }
+
+            pubs[rosRobots[i]->robot->getName() + "/thrusters"].publish(msg);
+        }
     }
 
     //////////////////////////////////////////////ACTUATORS//////////////////////////////////////////
@@ -263,7 +325,6 @@ void ROSSimulationManager::SimulationStepCompleted(Scalar timeStep)
             {
                 case ActuatorType::THRUSTER:
                     ((Thruster*)actuator)->setSetpoint(rosRobots[i]->thrusterSetpoints[thID++]);
-                    //ROS_INFO("[Thruster %d] Setpoint: %1.3lf Omega: %1.3lf Thrust: %1.3lf", thID, ((Thruster*)actuator)->getSetpoint(), ((Thruster*)actuator)->getOmega(), ((Thruster*)actuator)->getThrust());
                     break;
 
                 case ActuatorType::PROPELLER:
@@ -345,7 +406,7 @@ void ROSSimulationManager::FLSScanReady(FLS* fls)
     //Fill in the data message
     sensor_msgs::ImagePtr img = sonarMsgPrototypes[fls->getName()].first;
     img->header.stamp = ros::Time::now();
-    memcpy(img->data.data(), (float*)fls->getImageDataPointer(), img->step * img->height); 
+    memcpy(img->data.data(), (uint8_t*)fls->getImageDataPointer(), img->step * img->height); 
     
     //Fill in the display message
     sensor_msgs::ImagePtr disp = sonarMsgPrototypes[fls->getName()].second;
@@ -362,7 +423,7 @@ void ROSSimulationManager::SSSScanReady(SSS* sss)
     //Fill in the data message
     sensor_msgs::ImagePtr img = sonarMsgPrototypes[sss->getName()].first;
     img->header.stamp = ros::Time::now();
-    memcpy(img->data.data(), (float*)sss->getImageDataPointer(), img->step * img->height); 
+    memcpy(img->data.data(), (uint8_t*)sss->getImageDataPointer(), img->step * img->height); 
     
     //Fill in the display message
     sensor_msgs::ImagePtr disp = sonarMsgPrototypes[sss->getName()].second;
@@ -379,7 +440,7 @@ void ROSSimulationManager::MSISScanReady(MSIS* msis)
     //Fill in the data message
     sensor_msgs::ImagePtr img = sonarMsgPrototypes[msis->getName()].first;
     img->header.stamp = ros::Time::now();
-    memcpy(img->data.data(), (float*)msis->getImageDataPointer(), img->step * img->height); 
+    memcpy(img->data.data(), (uint8_t*)msis->getImageDataPointer(), img->step * img->height); 
     
     //Fill in the display message
     sensor_msgs::ImagePtr disp = sonarMsgPrototypes[msis->getName()].second;
@@ -500,6 +561,22 @@ VBSCallback::VBSCallback(VariableBuoyancy* act) : act(act)
 void VBSCallback::operator()(const std_msgs::Float64ConstPtr& msg)
 {   
     act->setFlowRate(msg->data);
+}
+
+TrajectoryCallback::TrajectoryCallback(ManualTrajectory* tr) : tr(tr)
+{
+}
+
+void TrajectoryCallback::operator()(const nav_msgs::OdometryConstPtr& msg)
+{
+    Quaternion q(msg->pose.pose.orientation.x, msg->pose.pose.orientation.y, 
+                    msg->pose.pose.orientation.z, msg->pose.pose.orientation.w);
+    Vector3 p(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
+    Vector3 v(msg->twist.twist.linear.x, msg->twist.twist.linear.y, msg->twist.twist.linear.z);
+    Vector3 omega(msg->twist.twist.angular.x, msg->twist.twist.angular.y, msg->twist.twist.angular.z);
+    tr->setTransform(Transform(q, p));
+    tr->setLinearVelocity(v);
+    tr->setAngularVelocity(omega);
 }
 
 FLSService::FLSService(FLS* fls) : fls(fls)
