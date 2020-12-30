@@ -56,6 +56,7 @@ catkin_package(
                  geometry_msgs 
                  nav_msgs 
                  sensor_msgs
+                 visualization_msgs
                  std_msgs 
                  std_srvs 
                  roscpp
