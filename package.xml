@@ -22,6 +22,6 @@
 	<depend>tf_conversions</depend>
 	<depend>opengl</depend>
 	<depend>sdl2</depend>
-	<depend>libfreetype6</depend>
+	<depend>libfreetype6-dev</depend>
 	<depend>libglew-dev</depend>
 </package>
