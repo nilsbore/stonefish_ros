@@ -7,9 +7,10 @@ jobs:
     strategy:
       matrix:
         env:
-          - {ROS_DISTRO: melodic, ROS_REPO: testing, UPSTREAM_WORKSPACE: 'stonefish_ros.rosinstall -stonefish_ros'}
+          - {ROS_DISTRO: noetic, ROS_REPO: testing, UPSTREAM_WORKSPACE: 'stonefish_ros.rosinstall -stonefish_ros'}
+          - {ROS_DISTRO: noetic, ROS_REPO: main, UPSTREAM_WORKSPACE: 'stonefish_ros.rosinstall -stonefish_ros'}
           - {ROS_DISTRO: melodic, ROS_REPO: main, UPSTREAM_WORKSPACE: 'stonefish_ros.rosinstall -stonefish_ros'}
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
         with:

@@ -20,7 +20,7 @@
 //  stonefish_ros
 //
 //  Created by Patryk Cieslak on 17/09/19.
-//  Copyright (c) 2019 Patryk Cieslak. All rights reserved.
+//  Copyright (c) 2019-2020 Patryk Cieslak. All rights reserved.
 //
 
 #ifndef __Stonefish_ROSSimulationManager__
@@ -34,12 +34,23 @@
 #include <tf/transform_broadcaster.h>
 #include <std_msgs/Float64.h>
 #include <sensor_msgs/JointState.h>
+#include <sensor_msgs/Image.h>
+#include <sensor_msgs/CameraInfo.h>
+#include <nav_msgs/Odometry.h>
 #include <cola2_msgs/Setpoints.h>
+#include <std_srvs/Trigger.h>
+#include <stonefish_ros/SonarSettings.h>
+#include <stonefish_ros/SonarSettings2.h>
 
 namespace sf
 {
 	class ColorCamera;
 	class DepthCamera;
+	class Multibeam2;
+	class FLS;
+	class SSS;
+	class MSIS;
+	class ManualTrajectory;
 
 	struct ROSRobot
 	{
@@ -63,24 +74,42 @@ namespace sf
 	{
 	public:
 		ROSSimulationManager(Scalar stepsPerSecond, std::string scenarioFilePath);
-	    virtual void BuildScenario();
-	    virtual void SimulationStepCompleted(Scalar timeStep);
-		
-	    virtual void ColorCameraImageReady(ColorCamera* cam);
-	    virtual void DepthCameraImageReady(DepthCamera* cam);
-	    
+	    virtual ~ROSSimulationManager();
+
+		virtual void BuildScenario();
+
 	    void AddROSRobot(ROSRobot* robot);
 
+		virtual void SimulationStepCompleted(Scalar timeStep);		
+	    virtual void ColorCameraImageReady(ColorCamera* cam);
+	    virtual void DepthCameraImageReady(DepthCamera* cam);
+		virtual void Multibeam2ScanReady(Multibeam2* mb);
+		virtual void FLSScanReady(FLS* fls);
+		virtual void SSSScanReady(SSS* sss);
+		virtual void MSISScanReady(MSIS* sss);
+
+	    bool EnableCurrents(std_srvs::Trigger::Request &req, std_srvs::Trigger::Response &res);
+		bool DisableCurrents(std_srvs::Trigger::Request &req, std_srvs::Trigger::Response &res);
+
+		virtual uint64_t getSimulationClock();
+		virtual void SimulationClockSleep(uint64_t us);
 	    ros::NodeHandle& getNodeHandle();
-	    std::map<std::string, ros::Publisher>& getPublishers();
+	    std::map<std::string, ros::ServiceServer>& getServiceServers();
+		std::map<std::string, ros::Publisher>& getPublishers();
 	    std::map<std::string, ros::Subscriber>& getSubscribers();
+		std::map<std::string, std::pair<sensor_msgs::ImagePtr, sensor_msgs::CameraInfoPtr>>& getCameraMsgPrototypes();
+		std::map<std::string, std::pair<sensor_msgs::ImagePtr, sensor_msgs::ImagePtr>>& getSonarMsgPrototypes();
 
 	protected:
 		std::string scnFilePath;
 		ros::NodeHandle nh;
 		tf::TransformBroadcaster br;
+		ros::ServiceServer srvECurrents, srvDCurrents;
+		std::map<std::string, ros::ServiceServer> srvs;
 		std::map<std::string, ros::Publisher> pubs;
 		std::map<std::string, ros::Subscriber> subs;
+		std::map<std::string, std::pair<sensor_msgs::ImagePtr, sensor_msgs::CameraInfoPtr>> cameraMsgPrototypes;
+		std::map<std::string, std::pair<sensor_msgs::ImagePtr, sensor_msgs::ImagePtr>> sonarMsgPrototypes;
 		std::vector<ROSRobot*> rosRobots;
 	};
 
@@ -126,6 +155,46 @@ namespace sf
 
 	private:
 		VariableBuoyancy* act;
+	};
+
+	class TrajectoryCallback
+	{
+	public:
+		TrajectoryCallback(ManualTrajectory* tr);
+		void operator()(const nav_msgs::OdometryConstPtr& msg);
+
+	private:
+		ManualTrajectory* tr;
+	};
+
+	class FLSService
+	{
+	public:
+		FLSService(FLS* fls);
+		bool operator()(stonefish_ros::SonarSettings::Request& req, stonefish_ros::SonarSettings::Response& res);
+	
+	private:
+		FLS* fls;
+	};
+
+	class SSSService
+	{
+	public:
+		SSSService(SSS* sss);
+		bool operator()(stonefish_ros::SonarSettings::Request& req, stonefish_ros::SonarSettings::Response& res);
+	
+	private:
+		SSS* sss;
+	};
+
+	class MSISService
+	{
+	public:
+		MSISService(MSIS* msis);
+		bool operator()(stonefish_ros::SonarSettings2::Request& req, stonefish_ros::SonarSettings2::Response& res);
+	
+	private:
+		MSIS* msis;
 	};
 }
 

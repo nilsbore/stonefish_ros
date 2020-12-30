@@ -20,7 +20,7 @@
 //  stonefish_ros
 //
 //  Created by Patryk Cieslak on 30/11/17.
-//  Copyright (c) 2017-2019 Patryk Cieslak. All rights reserved.
+//  Copyright (c) 2017-2020 Patryk Cieslak. All rights reserved.
 //
 
 #include "stonefish_ros/ROSInterface.h"
@@ -36,6 +36,13 @@
 #include <sensors/scalar/Multibeam.h>
 #include <sensors/vision/ColorCamera.h>
 #include <sensors/vision/DepthCamera.h>
+#include <sensors/vision/Multibeam2.h>
+#include <sensors/vision/FLS.h>
+#include <sensors/vision/SSS.h>
+#include <sensors/vision/MSIS.h>
+#include <sensors/Contact.h>
+#include <comms/USBL.h>
+#include <entities/AnimatedEntity.h>
 
 #include <sensor_msgs/FluidPressure.h>
 #include <sensor_msgs/Imu.h>
@@ -48,9 +55,13 @@
 #include <sensor_msgs/point_cloud2_iterator.h>
 #include <sensor_msgs/LaserScan.h>
 #include <geometry_msgs/WrenchStamped.h>
+#include <geometry_msgs/Vector3Stamped.h>
 #include <nav_msgs/Odometry.h>
+#include <visualization_msgs/Marker.h>
+#include <visualization_msgs/MarkerArray.h>
 #include <cola2_msgs/DVL.h>
 #include <cola2_msgs/Float32Stamped.h>
+#include <stonefish_ros/Int32Stamped.h>
 
 #include <Eigen/Core>
 #include <Eigen/Dense>
@@ -222,127 +233,6 @@ void ROSInterface::PublishEncoder(ros::Publisher& pub, RotaryEncoder* enc)
     pub.publish(msg);
 }
 
-void ROSInterface::PublishCamera(ros::Publisher& imagePub, ros::Publisher& cameraInfoPub, ColorCamera* cam)
-{
-	//Publish image message
-    sensor_msgs::Image img;
-    img.header.stamp = ros::Time::now();
-    img.header.frame_id = cam->getName();
-	cam->getResolution(img.width, img.height);
-	img.encoding = "rgb8";
-	img.is_bigendian = 0;
-    img.step = img.width*3;
-    img.data.resize(img.width*img.height*3);
-    //Copy image data
-    uint8_t* data = (uint8_t*)cam->getImageDataPointer();
-    for(uint32_t r = 0; r<img.height; ++r) //Every row of image
-    {
-		uint8_t* srcRow = data + r*img.step; 
-		uint8_t* dstRow = img.data.data() + (img.height-1-r) * img.step; 
-		memcpy(dstRow, srcRow, img.step);
-    }
-    imagePub.publish(img);
-	
-	//Publish camera info message
-	sensor_msgs::CameraInfo info;
-	info.header.stamp = img.header.stamp;
-	info.header.frame_id = cam->getName();
-    info.width = img.width;
-    info.height = img.height;
-    info.binning_x = 0;
-    info.binning_y = 0;
-    //Distortion
-    info.distortion_model = "plumb_bob";
-    info.D.resize(5, 0.0);
-    //Rectification (for stereo only)
-    info.R[0] = 1.0;
-    info.R[4] = 1.0;
-    info.R[8] = 1.0;
-    //Intrinsic
-    double tanhfov2 = tan(cam->getHorizontalFOV()/180.0*M_PI/2.0);
-    double tanvfov2 = (double)info.height/(double)info.width * tanhfov2;
-    info.K[2] = (double)info.width/2.0; //cx
-    info.K[5] = (double)info.height/2.0; //cy
-    info.K[0] = info.K[2]/tanhfov2; //fx
-    info.K[4] = info.K[5]/tanvfov2; //fy 
-    info.K[8] = 1.0;
-    //Projection
-    info.P[2] = info.K[2]; //cx'
-    info.P[6] = info.K[5]; //cy'
-    info.P[0] = info.K[0]; //fx';
-    info.P[5] = info.K[4]; //fy';
-    info.P[3] = 0.0; //Tx - position of second camera from stereo pair
-    info.P[7] = 0.0; //Ty;
-    info.P[10] = 1.0;
-    //ROI
-    info.roi.x_offset = 0;
-    info.roi.y_offset = 0;
-    info.roi.height = info.height;
-    info.roi.width = info.width;
-    info.roi.do_rectify = false;
-	cameraInfoPub.publish(info);
-}
-
-void ROSInterface::PublishPointCloud(ros::Publisher& pointCloudPub, DepthCamera* cam)
-{
-	uint32_t width, height, nPoints;
-	cam->getResolution(width, height);
-	nPoints = width*height;
-	float tanhfov2 = tanf(cam->getHorizontalFOV()/180.f * M_PI/2.f);
-    float tanvfov2 = tanhfov2 * (float)height/(float)width;
-    glm::vec2 range = cam->getDepthRange();
-
-    Eigen::Matrix3f K = Eigen::Matrix3f::Zero();
-    K(0,2) = (float)width/2.f; //cx
-    K(1,2) = (float)height/2.f; //cy
-    K(0,0) = K(0,2)/tanhfov2; //fx
-    K(1,1) = K(1,2)/tanvfov2; //fy
-    K(2,2) = 1.f;
-    Eigen::Matrix3f Kinv = K.inverse();
-
-    sensor_msgs::PointCloud2 msg;
-    msg.header.stamp = ros::Time::now();
-    msg.header.frame_id = cam->getName();
-    msg.height = 1;
-    
-    sensor_msgs::PointCloud2Modifier modifier(msg);
-    modifier.setPointCloud2Fields(3, "x", 1, sensor_msgs::PointField::FLOAT32, 
-    								 "y", 1, sensor_msgs::PointField::FLOAT32,
-    								 "z", 1, sensor_msgs::PointField::FLOAT32);
-    modifier.setPointCloud2FieldsByString(1, "xyz");
-    modifier.resize(nPoints);
-
-    sensor_msgs::PointCloud2Iterator<float> iterX(msg, "x");
-	sensor_msgs::PointCloud2Iterator<float> iterY(msg, "y");
-    sensor_msgs::PointCloud2Iterator<float> iterZ(msg, "z");
-
-    float* data = (float*)cam->getImageDataPointer();
-    uint32_t nGoodPoints = 0;
-
-    for(uint32_t i = 0; i<width; ++i)
-    	for(uint32_t h = 0; h<height; ++h)
-    	{
-    		float depth = data[width*h + i];
-    		if(depth < range.y) //If not at the detection boundary
-    		{
-				Eigen::Vector3f imagePoint(((float)i+0.5f)*depth, ((float)height-(float)h-1.f+0.5f)*depth, depth);
-    			Eigen::Vector3f camPoint = Kinv*imagePoint; 
-    			*iterX = camPoint.x();
-    			*iterY = camPoint.y();
-    			*iterZ = camPoint.z();
-    			++iterX;
-    			++iterY;
-    			++iterZ;
-    			++nGoodPoints;
-    		}
-    	}
-
-    msg.width = nGoodPoints;
-    modifier.resize(nGoodPoints);
-
-    pointCloudPub.publish(msg);
-}
-
 void ROSInterface::PublishLaserScan(ros::Publisher& laserScanPub, Multibeam* mbes)
 {
     Sample sample = mbes->getLastSample();
@@ -374,6 +264,287 @@ void ROSInterface::PublishLaserScan(ros::Publisher& laserScanPub, Multibeam* mbe
     }
 
     laserScanPub.publish(msg);
+}
+
+void ROSInterface::PublishPointCloud(ros::Publisher& pointCloudPub, Multibeam2* mb)
+{
+    uint32_t hRes, vRes, nPoints;
+    mb->getResolution(hRes, vRes);
+    nPoints = hRes * vRes;
+    glm::vec2 range = mb->getRangeLimits();
+    float hFovRad = mb->getHorizontalFOV()/180.f*M_PI;
+    float vFovRad = mb->getVerticalFOV()/180.f*M_PI; 
+    float hStepAngleRad = hFovRad/(float)(hRes-1);
+    float vStepAngleRad = vFovRad/(float)(vRes-1);
+
+    sensor_msgs::PointCloud2 msg;
+    msg.header.stamp = ros::Time::now();
+    msg.header.frame_id = mb->getName();
+    msg.height = 1;
+    msg.width = nPoints;
+
+    sensor_msgs::PointCloud2Modifier modifier(msg);
+    modifier.setPointCloud2Fields(3, "x", 1, sensor_msgs::PointField::FLOAT32,
+                                     "y", 1, sensor_msgs::PointField::FLOAT32,
+                                     "z", 1, sensor_msgs::PointField::FLOAT32);
+    modifier.setPointCloud2FieldsByString(1, "xyz");
+    modifier.resize(nPoints);
+
+    sensor_msgs::PointCloud2Iterator<float> iterX(msg, "x");
+    sensor_msgs::PointCloud2Iterator<float> iterY(msg, "y");
+    sensor_msgs::PointCloud2Iterator<float> iterZ(msg, "z");
+
+    float* data = (float*)mb->getRangeDataPointer();
+
+    for(uint32_t v=0; v<vRes; ++v)
+    {
+        uint32_t offset = v*hRes;
+        float hAngleRad = -hFovRad/2.f + (0.5f/hRes*hFovRad);
+        float vAngleRad = vFovRad/2.f - ((0.5f+v)/vRes*vFovRad);
+        for(uint32_t h=0; h<hRes; ++h)
+        {
+            float depth = data[offset + h];
+            Eigen::Vector3f mbPoint = Eigen::Vector3f(tanf(hAngleRad), tanf(vAngleRad), 1.f).normalized() * depth;
+            *iterX = mbPoint.x();
+    		*iterY = mbPoint.y();
+    		*iterZ = mbPoint.z();
+    		++iterX;
+    		++iterY;
+    		++iterZ;
+            hAngleRad += hStepAngleRad;
+        }
+    }
+    
+    pointCloudPub.publish(msg);
+}
+
+void ROSInterface::PublishContact(ros::Publisher& contactPub, Contact* cnt)
+{
+    if(cnt->getHistory().size() == 0)
+        return;
+
+    ContactPoint cp = cnt->getHistory().back();
+    
+    //Publish marker message
+    visualization_msgs::Marker msg;
+    msg.header.frame_id = "world_ned";
+    msg.header.stamp = ros::Time::now();
+    msg.ns = cnt->getName();
+    msg.id = 0;
+    msg.type = visualization_msgs::Marker::ARROW;
+    msg.action = visualization_msgs::Marker::ADD;
+    msg.pose.position.x = 0.0;
+    msg.pose.position.y = 0.0;
+    msg.pose.position.z = 0.0;
+    msg.pose.orientation.x = 0.0;
+    msg.pose.orientation.y = 0.0;
+    msg.pose.orientation.z = 0.0;
+    msg.pose.orientation.w = 1.0;
+    msg.points.resize(2);
+    msg.points[0].x = cp.locationA.getX();
+    msg.points[0].y = cp.locationA.getY();
+    msg.points[0].z = cp.locationA.getZ();
+    msg.points[1].x = cp.locationA.getX() + cp.normalForceA.getX();
+    msg.points[1].y = cp.locationA.getY() + cp.normalForceA.getY();
+    msg.points[1].z = cp.locationA.getZ() + cp.normalForceA.getZ();
+    msg.color.r = 1.0;
+    msg.color.g = 1.0;
+    msg.color.b = 0.0;
+    msg.color.a = 1.0;
+    contactPub.publish(msg);
+}
+
+void ROSInterface::PublishUSBL(ros::Publisher& usblPub, USBL* usbl)
+{
+    std::map<uint64_t, std::pair<Scalar, Vector3>>& transPos = usbl->getTransponderPositions();
+    if(transPos.size() == 0)
+        return;   
+
+    visualization_msgs::MarkerArray msg;
+    visualization_msgs::Marker marker;
+    marker.header.frame_id = usbl->getName();
+    marker.header.stamp = ros::Time::now();
+    marker.ns = usbl->getName();
+    marker.type = visualization_msgs::Marker::SPHERE;
+    marker.action = visualization_msgs::Marker::ADD;
+    marker.scale.x = marker.scale.y = marker.scale.z = 0.1;
+    marker.color.r = 1.0;
+    marker.color.g = 0.0;
+    marker.color.b = 0.0;
+    marker.color.a = 1.0;
+    marker.pose.orientation.x = 0.0;
+    marker.pose.orientation.y = 0.0;
+    marker.pose.orientation.z = 0.0;
+    marker.pose.orientation.w = 1.0;
+
+    std::map<uint64_t, std::pair<Scalar, Vector3>>::iterator it;
+    for(it = transPos.begin(); it!=transPos.end(); ++it)
+    {
+        marker.id = it->first;
+        Vector3 pos = it->second.second;
+        marker.pose.position.x = pos.getX();
+        marker.pose.position.y = pos.getY();
+        marker.pose.position.z = pos.getZ();
+        msg.markers.push_back(marker);    
+    }
+
+    usblPub.publish(msg);
+}
+
+void ROSInterface::PublishTrajectoryState(ros::Publisher& odom, ros::Publisher& iter, AnimatedEntity* anim)
+{
+    Trajectory* tr = anim->getTrajectory();
+    Transform T = tr->getInterpolatedTransform();
+    Vector3 p = T.getOrigin();
+    Quaternion q = T.getRotation();
+    Vector3 v = tr->getInterpolatedLinearVelocity();
+    Vector3 omega = tr->getInterpolatedAngularVelocity();
+
+    //Odometry message
+    nav_msgs::Odometry msg;
+    msg.header.frame_id = "world_ned";
+    msg.header.stamp = ros::Time::now();
+    msg.child_frame_id = anim->getName();
+    msg.pose.pose.position.x = p.x();
+    msg.pose.pose.position.y = p.y();
+    msg.pose.pose.position.z = p.z();
+    msg.pose.pose.orientation.x = q.x();
+    msg.pose.pose.orientation.y = q.y();
+    msg.pose.pose.orientation.z = q.z();
+    msg.pose.pose.orientation.w = q.w();
+    msg.twist.twist.linear.x = v.x();
+    msg.twist.twist.linear.y = v.y();
+    msg.twist.twist.linear.z = v.z();
+    msg.twist.twist.angular.x = omega.x();
+    msg.twist.twist.angular.y = omega.y();
+    msg.twist.twist.angular.z = omega.z();
+    odom.publish(msg);
+
+    //Iteration message
+    stonefish_ros::Int32Stamped msg2;
+    msg2.header = msg.header;
+    msg2.data = (int32_t)tr->getPlaybackIteration();
+    iter.publish(msg2);
+}
+
+std::pair<sensor_msgs::ImagePtr, sensor_msgs::CameraInfoPtr> ROSInterface::GenerateCameraMsgPrototypes(Camera* cam, bool depth)
+{
+    //Image message
+    sensor_msgs::ImagePtr img = boost::make_shared<sensor_msgs::Image>();
+    img->header.frame_id = cam->getName();
+	cam->getResolution(img->width, img->height);
+	img->encoding = depth ? "32FC1" : "rgb8";
+	img->is_bigendian = 0;
+    img->step = img->width * (depth ? sizeof(float) : 3);
+    img->data.resize(img->step * img->height);
+
+	//Camera info message
+	sensor_msgs::CameraInfoPtr info = boost::make_shared<sensor_msgs::CameraInfo>();
+	info->header.frame_id = cam->getName();
+    info->width = img->width;
+    info->height = img->height;
+    info->binning_x = 0;
+    info->binning_y = 0;
+    //Distortion
+    info->distortion_model = "plumb_bob";
+    info->D.resize(5, 0.0);
+    //Rectification (for stereo only)
+    info->R[0] = 1.0;
+    info->R[4] = 1.0;
+    info->R[8] = 1.0;
+    //Intrinsic
+    double tanhfov2 = tan(cam->getHorizontalFOV()/180.0*M_PI/2.0);
+    double tanvfov2 = (double)info->height/(double)info->width * tanhfov2;
+    info->K[2] = (double)info->width/2.0; //cx
+    info->K[5] = (double)info->height/2.0; //cy
+    info->K[0] = info->K[2]/tanhfov2; //fx
+    info->K[4] = info->K[5]/tanvfov2; //fy 
+    info->K[8] = 1.0;
+    //Projection
+    info->P[2] = info->K[2]; //cx'
+    info->P[6] = info->K[5]; //cy'
+    info->P[0] = info->K[0]; //fx';
+    info->P[5] = info->K[4]; //fy';
+    info->P[3] = 0.0; //Tx - position of second camera from stereo pair
+    info->P[7] = 0.0; //Ty;
+    info->P[10] = 1.0;
+    //ROI
+    info->roi.x_offset = 0;
+    info->roi.y_offset = 0;
+    info->roi.height = info->height;
+    info->roi.width = info->width;
+    info->roi.do_rectify = false;
+	
+    return std::make_pair(img, info);
+}
+
+std::pair<sensor_msgs::ImagePtr, sensor_msgs::ImagePtr> ROSInterface::GenerateFLSMsgPrototypes(FLS* fls)
+{
+    //Image message
+    sensor_msgs::ImagePtr img = boost::make_shared<sensor_msgs::Image>();
+    img->header.frame_id = fls->getName();
+    fls->getResolution(img->width, img->height);
+    img->encoding = "mono8";
+    img->is_bigendian = 0;
+    img->step = img->width;
+    img->data.resize(img->step * img->height);
+
+    //Display message
+    sensor_msgs::ImagePtr disp = boost::make_shared<sensor_msgs::Image>();
+    disp->header.frame_id = fls->getName();
+	fls->getDisplayResolution(disp->width, disp->height);
+	disp->encoding = "rgb8";
+	disp->is_bigendian = 0;
+    disp->step = disp->width * 3;
+    disp->data.resize(disp->step * disp->height);
+    
+    return std::make_pair(img, disp);
+}
+
+std::pair<sensor_msgs::ImagePtr, sensor_msgs::ImagePtr> ROSInterface::GenerateSSSMsgPrototypes(SSS* sss)
+{
+    //Image message
+    sensor_msgs::ImagePtr img = boost::make_shared<sensor_msgs::Image>();
+    img->header.frame_id = sss->getName();
+    sss->getResolution(img->width, img->height);
+    img->encoding = "mono8";
+    img->is_bigendian = 0;
+    img->step = img->width;
+    img->data.resize(img->step * img->height);
+
+    //Display message
+    sensor_msgs::ImagePtr disp = boost::make_shared<sensor_msgs::Image>();
+    disp->header.frame_id = sss->getName();
+	sss->getDisplayResolution(disp->width, disp->height);
+	disp->encoding = "rgb8";
+	disp->is_bigendian = 0;
+    disp->step = disp->width * 3;
+    disp->data.resize(disp->step * disp->height);
+    
+    return std::make_pair(img, disp);
+}
+
+std::pair<sensor_msgs::ImagePtr, sensor_msgs::ImagePtr> ROSInterface::GenerateMSISMsgPrototypes(MSIS* msis)
+{
+    //Image message
+    sensor_msgs::ImagePtr img = boost::make_shared<sensor_msgs::Image>();
+    img->header.frame_id = msis->getName();
+    msis->getResolution(img->width, img->height);
+    img->encoding = "mono8";
+    img->is_bigendian = 0;
+    img->step = img->width;
+    img->data.resize(img->step * img->height);
+
+    //Display message
+    sensor_msgs::ImagePtr disp = boost::make_shared<sensor_msgs::Image>();
+    disp->header.frame_id = msis->getName();
+	msis->getDisplayResolution(disp->width, disp->height);
+	disp->encoding = "rgb8";
+	disp->is_bigendian = 0;
+    disp->step = disp->width * 3;
+    disp->data.resize(disp->step * disp->height);
+    
+    return std::make_pair(img, disp);
 }
 
 }
