@@ -74,8 +74,8 @@ src/ROSScenarioParser.cpp
 
 add_dependencies(stonefish_ros ${catkin_EXPORTED_TARGETS})
 
-target_link_libraries(stonefish_ros ${catkin_LIBRARIES} ${BULLET_LIBRARIES} ${Stonefish_LIBRARIES})
+target_link_libraries(stonefish_ros ${catkin_LIBRARIES} ${Stonefish_LIBRARIES})
 
 #Universal simulator with XML parser
 add_executable(parsed_simulator src/parsed_simulator.cpp)
-target_link_libraries(parsed_simulator ${catkin_LIBRARIES} ${BULLET_LIBRARIES} ${Stonefish_LIBRARIES} stonefish_ros)
+target_link_libraries(parsed_simulator ${catkin_LIBRARIES} ${Stonefish_LIBRARIES} stonefish_ros)
