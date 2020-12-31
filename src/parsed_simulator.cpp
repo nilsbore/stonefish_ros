@@ -32,12 +32,14 @@ int main(int argc, char **argv)
 {
 	ros::init(argc, argv, "parsed_simulator", ros::init_options::NoSigintHandler);
 
-	if(argc < 7)
+    //Check number of command line arguments
+	if(argc < 8)
 	{
-		ROS_FATAL("Not enough command line parameters provided!");
+		ROS_FATAL("Not enough command line arguments provided!");
 		return 1;
 	}
 
+    //Parse arguments
     std::string dataDirPath = std::string(argv[1]) + "/";
     std::string scenarioPath(argv[2]);
     sf::Scalar rate = atof(argv[3]);
@@ -54,6 +56,7 @@ int main(int argc, char **argv)
         s.atmosphere = sf::RenderQuality::LOW;
         s.ocean = sf::RenderQuality::LOW;
         s.aa = sf::RenderQuality::LOW;
+        s.ssr = sf::RenderQuality::DISABLED;
     }
     else if(quality == "high")
     {
@@ -62,6 +65,7 @@ int main(int argc, char **argv)
         s.atmosphere = sf::RenderQuality::HIGH;
         s.ocean = sf::RenderQuality::HIGH;
         s.aa = sf::RenderQuality::HIGH;
+        s.ssr = sf::RenderQuality::HIGH;
     }
     else // "medium"
     {
@@ -70,7 +74,10 @@ int main(int argc, char **argv)
         s.atmosphere = sf::RenderQuality::MEDIUM;
         s.ocean = sf::RenderQuality::MEDIUM;
         s.aa = sf::RenderQuality::MEDIUM;
+        s.ssr = sf::RenderQuality::MEDIUM;
     }
+
+    std::string shaderPath = std::string(argv[7]) + "/";
 
     sf::HelperSettings h;
     h.showFluidDynamics = false;
@@ -81,7 +88,7 @@ int main(int argc, char **argv)
     h.showForces = false;
 	
 	sf::ROSSimulationManager manager(rate, scenarioPath);
-	sf::GraphicalSimulationApp app("Stonefish Simulator", dataDirPath, s, h, &manager); 
+    sf::GraphicalSimulationApp app("Stonefish Simulator", dataDirPath, s, h, &manager, shaderPath); 
 	app.Run();
 
 	return 0;

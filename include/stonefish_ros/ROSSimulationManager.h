@@ -36,6 +36,7 @@
 #include <sensor_msgs/JointState.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/CameraInfo.h>
+#include <nav_msgs/Odometry.h>
 #include <cola2_msgs/Setpoints.h>
 #include <std_srvs/Trigger.h>
 #include <stonefish_ros/SonarSettings.h>
@@ -49,6 +50,7 @@ namespace sf
 	class FLS;
 	class SSS;
 	class MSIS;
+	class ManualTrajectory;
 
 	struct ROSRobot
 	{
@@ -75,6 +77,7 @@ namespace sf
 	    virtual ~ROSSimulationManager();
 
 		virtual void BuildScenario();
+
 	    void AddROSRobot(ROSRobot* robot);
 
 		virtual void SimulationStepCompleted(Scalar timeStep);		
@@ -88,6 +91,8 @@ namespace sf
 	    bool EnableCurrents(std_srvs::Trigger::Request &req, std_srvs::Trigger::Response &res);
 		bool DisableCurrents(std_srvs::Trigger::Request &req, std_srvs::Trigger::Response &res);
 
+		virtual uint64_t getSimulationClock();
+		virtual void SimulationClockSleep(uint64_t us);
 	    ros::NodeHandle& getNodeHandle();
 	    std::map<std::string, ros::ServiceServer>& getServiceServers();
 		std::map<std::string, ros::Publisher>& getPublishers();
@@ -150,6 +155,16 @@ namespace sf
 
 	private:
 		VariableBuoyancy* act;
+	};
+
+	class TrajectoryCallback
+	{
+	public:
+		TrajectoryCallback(ManualTrajectory* tr);
+		void operator()(const nav_msgs::OdometryConstPtr& msg);
+
+	private:
+		ManualTrajectory* tr;
 	};
 
 	class FLSService
