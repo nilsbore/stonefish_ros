@@ -3,7 +3,7 @@ project(stonefish_ros)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-reorder -DBT_EULER_DEFAULT_ZYX -DBT_USE_DOUBLE_PRECISION -DBUILD_PYBULLET=OFF -DBUILD_SHARED_LIBS=ON -DUSE_DOUBLE_PRECISION=ON")
 
-add_definitions(-DSHADER_DIR_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/external/stonefish/Library/shaders/\")
+#add_definitions(-DSHADER_DIR_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/external/stonefish/Library/shaders/\")
 
 find_package(catkin REQUIRED COMPONENTS
   message_generation
@@ -113,5 +113,10 @@ install(DIRECTORY include/${PROJECT_NAME}/
 ## Mark other files for installation (e.g. launch and bag files, etc.)
 install(DIRECTORY launch/
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
+  PATTERN ".svn" EXCLUDE
+)
+
+install(DIRECTORY external/stonefish/Library/shaders/
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/external/stonefish/Library/shaders
   PATTERN ".svn" EXCLUDE
 )
