@@ -182,6 +182,7 @@ bool ROSScenarioParser::ParseRobot(XMLElement* element)
     unsigned int nThrusters = 0;
     unsigned int nPropellers = 0;
     unsigned int nServos = 0;
+    unsigned int nRudders = 0;
 
     unsigned int aID = 0;
     Actuator* act;
@@ -197,6 +198,10 @@ bool ROSScenarioParser::ParseRobot(XMLElement* element)
                 ++nPropellers;
                 break;
 
+            case ActuatorType::RUDDER:
+                ++nRudders;
+                break;
+
             case ActuatorType::SERVO:
                 ++nServos;
                 break;
@@ -206,7 +211,7 @@ bool ROSScenarioParser::ParseRobot(XMLElement* element)
         }
     }
 
-    ROSRobot* rosRobot = new ROSRobot(robot, nThrusters, nPropellers);
+    ROSRobot* rosRobot = new ROSRobot(robot, nThrusters, nPropellers, nRudders);
 
     //Initialise servo setpoints
     if(nServos > 0)
@@ -232,6 +237,7 @@ bool ROSScenarioParser::ParseRobot(XMLElement* element)
     {
         const char* topicThrust = nullptr;
         const char* topicProp = nullptr;
+        const char* topicRudder = nullptr;
         const char* topicSrv = nullptr;
 
         if(nThrusters > 0 && item->QueryStringAttribute("thrusters", &topicThrust) == XML_SUCCESS)
@@ -239,6 +245,9 @@ bool ROSScenarioParser::ParseRobot(XMLElement* element)
             
         if(nPropellers > 0 && item->QueryStringAttribute("propellers", &topicProp) == XML_SUCCESS)
             subs[robot->getName() + "/propellers"] = nh.subscribe<cola2_msgs::Setpoints>(std::string(topicProp), 10, PropellersCallback(sim, rosRobot));
+            
+        if(nRudders > 0 && item->QueryStringAttribute("rudders", &topicRudder) == XML_SUCCESS)
+            subs[robot->getName() + "/rudders"] = nh.subscribe<cola2_msgs::Setpoints>(std::string(topicRudder), 10, RuddersCallback(sim, rosRobot));
         
         if(nServos > 0 && item->QueryStringAttribute("servos", &topicSrv) == XML_SUCCESS)
             subs[robot->getName() + "/servos"] = nh.subscribe<sensor_msgs::JointState>(std::string(topicSrv), 10, ServosCallback(sim, rosRobot));
