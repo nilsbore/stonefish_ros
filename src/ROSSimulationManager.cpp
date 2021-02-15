@@ -20,7 +20,7 @@
 //  stonefish_ros
 //
 //  Created by Patryk Cieslak on 17/09/19.
-//  Copyright (c) 2019-2020 Patryk Cieslak. All rights reserved.
+//  Copyright (c) 2019-2021 Patryk Cieslak. All rights reserved.
 //
 
 #include "stonefish_ros/ROSSimulationManager.h"
@@ -31,8 +31,12 @@
 #include <core/Robot.h>
 #include <entities/AnimatedEntity.h>
 #include <entities/animation/ManualTrajectory.h>
+#include <entities/forcefields/Uniform.h>
+#include <entities/forcefields/Jet.h>
 #include <sensors/scalar/Pressure.h>
 #include <sensors/scalar/DVL.h>
+#include <sensors/scalar/Accelerometer.h>
+#include <sensors/scalar/Gyroscope.h>
 #include <sensors/scalar/IMU.h>
 #include <sensors/scalar/GPS.h>
 #include <sensors/scalar/ForceTorque.h>
@@ -52,6 +56,8 @@
 #include <actuators/Rudder.h>
 #include <actuators/Servo.h>
 #include <utils/SystemUtil.hpp>
+
+#include <ros/file_log.h>
 
 namespace sf
 {
@@ -109,8 +115,23 @@ std::map<std::string, std::pair<sensor_msgs::ImagePtr, sensor_msgs::ImagePtr>>& 
 
 void ROSSimulationManager::BuildScenario()
 {
+    //Run parser
     ROSScenarioParser parser(this);
-    parser.Parse(scnFilePath);
+    bool success = parser.Parse(scnFilePath);
+
+    //Save log
+    std::string logFilePath = ros::file_log::getLogDirectory() + "/stonefish_ros_parser.log";
+    bool success2 = parser.SaveLog(logFilePath);
+    
+    if(!success)
+    {
+        ROS_ERROR("Parsing of scenario file '%s' failed!", scnFilePath.c_str());
+        if(success2)
+            ROS_ERROR("For more information check the parser log file '%s'.", logFilePath.c_str());
+    }
+
+    if(!success2)
+        ROS_ERROR("Parser log file '%s' could not be saved!", logFilePath.c_str());
 }
 
 void ROSSimulationManager::AddROSRobot(ROSRobot* robot)
@@ -135,12 +156,20 @@ void ROSSimulationManager::SimulationStepCompleted(Scalar timeStep)
 
             switch(((ScalarSensor*)sensor)->getScalarSensorType())
             {
-                case ScalarSensorType::ODOM:
-                    ROSInterface::PublishOdometry(pubs[sensor->getName()], (Odometry*)sensor);
+                case ScalarSensorType::ACC:
+                    ROSInterface::PublishAccelerometer(pubs[sensor->getName()], (Accelerometer*)sensor);
+                    break;
+
+                case ScalarSensorType::GYRO:
+                    ROSInterface::PublishGyroscope(pubs[sensor->getName()], (Gyroscope*)sensor);
                     break;
 
                 case ScalarSensorType::IMU:
                     ROSInterface::PublishIMU(pubs[sensor->getName()], (IMU*)sensor);
+                    break;
+
+                case ScalarSensorType::ODOM:
+                    ROSInterface::PublishOdometry(pubs[sensor->getName()], (Odometry*)sensor);
                     break;
 
                 case ScalarSensorType::DVL:
@@ -479,6 +508,24 @@ bool ROSSimulationManager::DisableCurrents(std_srvs::Trigger::Request &req, std_
     return true;
 }
 
+UniformVFCallback::UniformVFCallback(Uniform* vf) : vf(vf)
+{
+}
+
+void UniformVFCallback::operator()(const geometry_msgs::Vector3ConstPtr& msg)
+{
+    vf->setVelocity(Vector3(msg->x, msg->y, msg->z));
+}
+
+JetVFCallback::JetVFCallback(Jet* vf) : vf(vf)
+{
+}
+
+void JetVFCallback::operator()(const std_msgs::Float64ConstPtr& msg)
+{
+    vf->setOutletVelocity(msg->data);
+}
+
 ThrustersCallback::ThrustersCallback(ROSSimulationManager* sm, ROSRobot* robot) : sm(sm), robot(robot)
 {
 }
@@ -529,7 +576,6 @@ void RuddersCallback::operator()(const cola2_msgs::SetpointsConstPtr& msg)
 
 ServosCallback::ServosCallback(ROSSimulationManager* sm, ROSRobot* robot) : sm(sm), robot(robot)
 {
-
 }
 
 void ServosCallback::operator()(const sensor_msgs::JointStateConstPtr& msg)
@@ -583,6 +629,57 @@ VBSCallback::VBSCallback(VariableBuoyancy* act) : act(act)
 void VBSCallback::operator()(const std_msgs::Float64ConstPtr& msg)
 {   
     act->setFlowRate(msg->data);
+}
+
+ActuatorOriginCallback::ActuatorOriginCallback(Actuator* act) : act(act)
+{
+}
+
+void ActuatorOriginCallback::operator()(const geometry_msgs::TransformConstPtr& msg)
+{
+    Transform T;
+    T.setOrigin(Vector3(msg->translation.x, msg->translation.y, msg->translation.z));
+    T.setRotation(Quaternion(msg->rotation.x, msg->rotation.y, msg->rotation.z, msg->rotation.w));
+
+    switch(act->getType())
+    {
+        case ActuatorType::THRUSTER:
+        case ActuatorType::PROPELLER:
+        case ActuatorType::VBS:
+        case ActuatorType::LIGHT:
+            ((LinkActuator*)act)->setRelativeActuatorFrame(T);
+            break;
+
+        default:
+            ROS_WARN_STREAM("Live update of origin frame of actuator '" << act->getName() << "' not supported!");
+            break;
+    }
+}
+
+SensorOriginCallback::SensorOriginCallback(Sensor* sens) : sens(sens)
+{
+}
+
+void SensorOriginCallback::operator()(const geometry_msgs::TransformConstPtr& msg)
+{
+    Transform T;
+    T.setOrigin(Vector3(msg->translation.x, msg->translation.y, msg->translation.z));
+    T.setRotation(Quaternion(msg->rotation.x, msg->rotation.y, msg->rotation.z, msg->rotation.w));
+
+    switch(sens->getType())
+    {
+        case SensorType::LINK:
+            ((LinkSensor*)sens)->setRelativeSensorFrame(T);
+            break;
+
+        case SensorType::VISION:
+            ((VisionSensor*)sens)->setRelativeSensorFrame(T);
+            break;
+        
+        default:
+            ROS_WARN_STREAM("Live update of origin frame of sensor '" << sens->getName() << "' not supported!");
+            break;
+    }
 }
 
 TrajectoryCallback::TrajectoryCallback(ManualTrajectory* tr) : tr(tr)
