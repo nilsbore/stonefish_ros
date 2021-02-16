@@ -20,7 +20,7 @@
 //  stonefish_ros
 //
 //  Created by Patryk Cieslak on 17/09/19.
-//  Copyright (c) 2019-2020 Patryk Cieslak. All rights reserved.
+//  Copyright (c) 2019-2021 Patryk Cieslak. All rights reserved.
 //
 
 #include "stonefish_ros/ROSScenarioParser.h"
@@ -29,7 +29,10 @@
 
 #include <core/Robot.h>
 #include <entities/AnimatedEntity.h>
+#include <entities/forcefields/Uniform.h>
+#include <entities/forcefields/Jet.h>
 #include <actuators/Actuator.h>
+#include <actuators/Light.h>
 #include <actuators/Servo.h>
 #include <sensors/ScalarSensor.h>
 #include <sensors/vision/ColorCamera.h>
@@ -40,6 +43,7 @@
 #include <sensors/vision/MSIS.h>
 #include <comms/Comm.h>
 #include <std_msgs/Float64.h>
+#include <geometry_msgs/Transform.h>
 #include <sensor_msgs/FluidPressure.h>
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/Range.h>
@@ -50,6 +54,8 @@
 #include <sensor_msgs/LaserScan.h>
 #include <sensor_msgs/JointState.h>
 #include <nav_msgs/Odometry.h>
+#include <geometry_msgs/AccelWithCovarianceStamped.h>
+#include <geometry_msgs/TwistWithCovarianceStamped.h>
 #include <geometry_msgs/WrenchStamped.h>
 #include <geometry_msgs/Vector3Stamped.h>
 #include <visualization_msgs/Marker.h>
@@ -84,7 +90,8 @@ std::string ROSScenarioParser::SubstituteROSVars(const std::string& value)
                                          std::istream_iterator<std::string>());
         if (results.size() != 2)
         {
-            ROS_ERROR("Scenario parser(ROS): substitution args need to be 2, got: %s", arguments.c_str());
+            log.Print(MessageType::ERROR, "[ROS] Argument substitution requires 2 values to be provided, got: '%s'!", arguments.c_str());
+            ROS_ERROR("Scenario parser: Argument substitution failed '%s'!", arguments.c_str());
             continue;
         }
 
@@ -93,7 +100,8 @@ std::string ROSScenarioParser::SubstituteROSVars(const std::string& value)
             std::string packagePath = ros::package::getPath(results[1]);
             if (packagePath.empty())
             {
-                ROS_ERROR("Scenario parser(ROS): could not find package '%s'!", results[1].c_str());
+                log.Print(MessageType::ERROR, "[ROS] Could not find package '%s'!", results[1].c_str());
+                ROS_ERROR("Scenario parser: Could not find package '%s'!", results[1].c_str());
                 return value;
             }
             replacedValue += packagePath;
@@ -108,7 +116,8 @@ std::string ROSScenarioParser::SubstituteROSVars(const std::string& value)
             }
             if (!ros::param::get(results[1], param))
             {
-                ROS_ERROR("Scenario parser(ROS): could not find parameter '%s'!", results[1].c_str());
+                log.Print(MessageType::ERROR, "[ROS] Could not find parameter '%s'!", results[1].c_str());
+                ROS_ERROR("Scenario parser: Could not find parameter '%s'!", results[1].c_str());
                 return value;
             }
             replacedValue += param;
@@ -137,10 +146,9 @@ bool ROSScenarioParser::ReplaceROSVars(XMLNode* node)
             std::string substitutedValue = SubstituteROSVars(value);
             if (substitutedValue != value)
             {
-                ROS_INFO("Scenario parser(ROS): replacing '%s' with '%s'.", value.c_str(), substitutedValue.c_str());
+                log.Print(MessageType::INFO, "[ROS] Replacing '%s' with '%s'.", value.c_str(), substitutedValue.c_str());
                 element->SetAttribute(attr->Name(), substitutedValue.c_str());
             }
-
         }
     }
 
@@ -160,6 +168,49 @@ bool ROSScenarioParser::PreProcess(XMLNode* root, const std::map<std::string, st
         return false;
     //Then process include arguments
     return ScenarioParser::PreProcess(root, args);
+}
+
+VelocityField* ROSScenarioParser::ParseVelocityField(XMLElement* element)
+{
+    VelocityField* vf = ScenarioParser::ParseVelocityField(element);
+    if(vf != nullptr)
+    {
+        ROSSimulationManager* sim = (ROSSimulationManager*)getSimulationManager();
+        ros::NodeHandle& nh = sim->getNodeHandle();
+        std::map<std::string, ros::Subscriber>& subs = sim->getSubscribers();
+        XMLElement* item;
+
+        switch(vf->getType())
+        {
+            case VelocityFieldType::UNIFORM:
+            {
+                const char* subTopic = nullptr;
+                if((item = element->FirstChildElement("ros_subscriber")) != nullptr
+                   && item->QueryStringAttribute("velocity", &subTopic) == XML_SUCCESS)
+                {
+                    subs["vf"+std::to_string(ros::Time::now().toNSec())]  //Unique subscriber key string
+                        = nh.subscribe<geometry_msgs::Vector3>(std::string(subTopic), 1, UniformVFCallback((Uniform*)vf));
+                }
+            }
+                break;
+
+            case VelocityFieldType::JET:
+            {
+                const char* subTopic = nullptr;
+                if((item = element->FirstChildElement("ros_subscriber")) != nullptr
+                   && item->QueryStringAttribute("outlet_velocity", &subTopic) == XML_SUCCESS)
+                {
+                    subs["vf"+std::to_string(ros::Time::now().toNSec())]  //Unique subscriber key string
+                        = nh.subscribe<std_msgs::Float64>(std::string(subTopic), 1, JetVFCallback((Jet*)vf));
+                }
+            }
+                break;
+
+            default:
+                break;
+        }
+    }
+    return vf;
 }
 
 bool ROSScenarioParser::ParseRobot(XMLElement* element)
@@ -320,43 +371,61 @@ bool ROSScenarioParser::ParseAnimated(XMLElement* element)
     return true;
 }
 
-bool ROSScenarioParser::ParseActuator(XMLElement* element, Robot* robot)
+Actuator* ROSScenarioParser::ParseActuator(XMLElement* element, const std::string& namePrefix)
 {
-    if(!ScenarioParser::ParseActuator(element, robot))
-        return false;
-
-    ROSSimulationManager* sim = (ROSSimulationManager*)getSimulationManager();
-    ros::NodeHandle& nh = sim->getNodeHandle();
-    std::map<std::string, ros::Publisher>& pubs = sim->getPublishers();
-    std::map<std::string, ros::Subscriber>& subs = sim->getSubscribers();
-
-    //Actuator info
-    const char* name = nullptr;
-    const char* type = nullptr;
-    element->QueryStringAttribute("name", &name);
-    element->QueryStringAttribute("type", &type);
-    std::string actuatorName = robot->getName() + "/" + std::string(name);
-    std::string typeStr(type);
-
-    //Publish and subscribe info
-    if(typeStr == "vbs")
+    Actuator* act = ScenarioParser::ParseActuator(element, namePrefix);
+    if(act != nullptr)
     {
+        ROSSimulationManager* sim = (ROSSimulationManager*)getSimulationManager();
+        ros::NodeHandle& nh = sim->getNodeHandle();
+        std::map<std::string, ros::Publisher>& pubs = sim->getPublishers();
+        std::map<std::string, ros::Subscriber>& subs = sim->getSubscribers();
+        std::string actuatorName = act->getName();
         XMLElement* item;
-        const char* pubTopic = nullptr;
-        const char* subTopic = nullptr;
-        if((item = element->FirstChildElement("ros_publisher")) != nullptr 
-            && item->QueryStringAttribute("topic", &pubTopic) == XML_SUCCESS)
+        //Actuator specific handling
+        switch(act->getType())
         {
-            pubs[actuatorName] = nh.advertise<std_msgs::Float64>(std::string(pubTopic), 10);
+            case ActuatorType::VBS:
+            {
+                const char* pubTopic = nullptr;
+                const char* subTopic = nullptr;
+                if((item = element->FirstChildElement("ros_publisher")) != nullptr 
+                    && item->QueryStringAttribute("topic", &pubTopic) == XML_SUCCESS)
+                {
+                    pubs[actuatorName] = nh.advertise<std_msgs::Float64>(std::string(pubTopic), 10);
+                }
+                if((item = element->FirstChildElement("ros_subscriber")) != nullptr
+                    && item->QueryStringAttribute("topic", &subTopic) == XML_SUCCESS)
+                {
+                    subs[actuatorName] = nh.subscribe<std_msgs::Float64>(std::string(subTopic), 1, VBSCallback((VariableBuoyancy*)act));
+                }
+            } 
+                break;
+        
+            default:
+                break;
         }
-        if((item = element->FirstChildElement("ros_subscriber")) != nullptr
-            && item->QueryStringAttribute("topic", &subTopic) == XML_SUCCESS)
+        //Handling of online origin updates
+        switch(act->getType())
         {
-            subs[actuatorName] = nh.subscribe<std_msgs::Float64>(std::string(subTopic), 1, VBSCallback((VariableBuoyancy*)robot->getActuator(actuatorName)));
+            case ActuatorType::THRUSTER:
+            case ActuatorType::PROPELLER:
+            case ActuatorType::VBS:
+            {
+                const char* originTopic = nullptr;
+                if((item = element->FirstChildElement("ros_subscriber")) != nullptr 
+                    && item->QueryStringAttribute("origin", &originTopic) == XML_SUCCESS)
+                {
+                    subs[actuatorName] = nh.subscribe<geometry_msgs::Transform>(std::string(originTopic), 1, ActuatorOriginCallback(act));
+                }
+            }
+                break;
+            
+            default:
+                break;
         }
     }
-
-    return true;
+    return act;
 }
 
 Sensor* ROSScenarioParser::ParseSensor(XMLElement* element, const std::string& namePrefix)
@@ -368,6 +437,7 @@ Sensor* ROSScenarioParser::ParseSensor(XMLElement* element, const std::string& n
         ros::NodeHandle& nh = sim->getNodeHandle();
         std::map<std::string, ros::ServiceServer>& srvs = sim->getServiceServers();
         std::map<std::string, ros::Publisher>& pubs = sim->getPublishers();
+        std::map<std::string, ros::Subscriber>& subs = sim->getSubscribers();
         std::map<std::string, std::pair<sensor_msgs::ImagePtr, sensor_msgs::CameraInfoPtr>>& camMsgProto = sim->getCameraMsgPrototypes();
         std::map<std::string, std::pair<sensor_msgs::ImagePtr, sensor_msgs::ImagePtr>>& sonarMsgProto = sim->getSonarMsgPrototypes();
         std::string sensorName = sens->getName();
@@ -388,10 +458,37 @@ Sensor* ROSScenarioParser::ParseSensor(XMLElement* element, const std::string& n
         switch(sens->getType())
         {
             case SensorType::JOINT:
+            {
+                switch(((ScalarSensor*)sens)->getScalarSensorType())
+                {
+                    case ScalarSensorType::FT:
+                        pubs[sensorName] = nh.advertise<geometry_msgs::WrenchStamped>(topicStr, queueSize);
+                        break;
+
+                    case ScalarSensorType::ENCODER:
+                        pubs[sensorName] = nh.advertise<sensor_msgs::JointState>(topicStr, queueSize);
+                        break;
+
+                    default:
+                        log.Print(MessageType::ERROR, "[ROS] Sensor '%s' not supported!", sensorName.c_str());
+                        ROS_ERROR("Scenario parser: Sensor '%s' not supported!", sensorName.c_str());
+                        break;
+                }
+            }
+                break;
+
             case SensorType::LINK:
             {
                 switch(((ScalarSensor*)sens)->getScalarSensorType())
                 {
+                    case ScalarSensorType::ACC:
+                        pubs[sensorName] = nh.advertise<geometry_msgs::AccelWithCovarianceStamped>(topicStr, queueSize);
+                        break;
+
+                    case ScalarSensorType::GYRO:
+                        pubs[sensorName] = nh.advertise<geometry_msgs::TwistWithCovarianceStamped>(topicStr, queueSize);
+                        break;
+
                     case ScalarSensorType::IMU:
                         pubs[sensorName] = nh.advertise<sensor_msgs::Imu>(topicStr, queueSize);
                         break;
@@ -421,21 +518,21 @@ Sensor* ROSScenarioParser::ParseSensor(XMLElement* element, const std::string& n
                         pubs[sensorName] = nh.advertise<nav_msgs::Odometry>(topicStr, queueSize);
                         break;
 
-                    case ScalarSensorType::FT:
-                        pubs[sensorName] = nh.advertise<geometry_msgs::WrenchStamped>(topicStr, queueSize);
-                        break;
-
-                    case ScalarSensorType::ENCODER:
-                        pubs[sensorName] = nh.advertise<sensor_msgs::JointState>(topicStr, queueSize);
-                        break;
-
                     case ScalarSensorType::MULTIBEAM:
                         pubs[sensorName] = nh.advertise<sensor_msgs::LaserScan>(topicStr, queueSize);
                         break;
 
                     default:
-                        ROS_ERROR("Scenario parser(ROS): sensor '%s' not supported!", sensorName.c_str());
+                        log.Print(MessageType::ERROR, "[ROS] Sensor '%s' not supported!", sensorName.c_str());
+                        ROS_ERROR("Scenario parser: Sensor '%s' not supported!", sensorName.c_str());
                         break;
+                }
+                //Origin frame updates
+                const char* originTopic = nullptr;
+                if((item = element->FirstChildElement("ros_subscriber")) != nullptr 
+                    && item->QueryStringAttribute("origin", &originTopic) == XML_SUCCESS)
+                {
+                    subs[sensorName] = nh.subscribe<geometry_msgs::Transform>(std::string(originTopic), queueSize, SensorOriginCallback(sens));
                 }
             }
                 break;
@@ -506,14 +603,23 @@ Sensor* ROSScenarioParser::ParseSensor(XMLElement* element, const std::string& n
                         break;
 
                     default:
-                        ROS_ERROR("Scenario parser(ROS): sensor '%s' not supported!", sensorName.c_str());
+                        log.Print(MessageType::ERROR, "[ROS] Sensor '%s' not supported!", sensorName.c_str());
+                        ROS_ERROR("Scenario parser: Sensor '%s' not supported!", sensorName.c_str());
                         break;
+                }
+                //Origin frame updates
+                const char* originTopic = nullptr;
+                if((item = element->FirstChildElement("ros_subscriber")) != nullptr 
+                    && item->QueryStringAttribute("origin", &originTopic) == XML_SUCCESS)
+                {
+                    subs[sensorName] = nh.subscribe<geometry_msgs::Transform>(std::string(originTopic), queueSize, SensorOriginCallback(sens));
                 }
             }
                 break;
 
             default:
-                ROS_ERROR("Scenario parser(ROS): sensor '%s' not supported!", sensorName.c_str());
+                log.Print(MessageType::ERROR, "[ROS] Sensor '%s' not supported!", sensorName.c_str());
+                ROS_ERROR("Scenario parser: Sensor '%s' not supported!", sensorName.c_str());        
                 break;
         }
     }
@@ -553,6 +659,27 @@ Comm* ROSScenarioParser::ParseComm(XMLElement* element, const std::string& nameP
         }
     }
     return comm;
+}
+
+Light* ROSScenarioParser::ParseLight(XMLElement* element, const std::string& namePrefix)
+{
+    Light* l = ScenarioParser::ParseLight(element, namePrefix);
+    if(l != nullptr)
+    {
+        ROSSimulationManager* sim = (ROSSimulationManager*)getSimulationManager();
+        ros::NodeHandle& nh = sim->getNodeHandle();
+        std::map<std::string, ros::Subscriber>& subs = sim->getSubscribers();
+        XMLElement* item;
+        
+        //Online update of light origin frame
+        const char* originTopic = nullptr;
+        if((item = element->FirstChildElement("ros_subscriber")) != nullptr 
+            && item->QueryStringAttribute("origin", &originTopic) == XML_SUCCESS)
+        {
+            subs[l->getName()] = nh.subscribe<geometry_msgs::Transform>(std::string(originTopic), 1, ActuatorOriginCallback(l));
+        }
+    }
+    return l;
 }
 
 bool ROSScenarioParser::ParseContact(XMLElement* element)

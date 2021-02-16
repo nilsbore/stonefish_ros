@@ -72,6 +72,10 @@ include_directories(
   ${Stonefish_INCLUDE_DIRS}
 )
 
+link_directories(
+  ${Stonefish_LIBRARY_DIRS}
+)
+
 #Library
 add_library(stonefish_ros SHARED
 src/ROSInterface.cpp
